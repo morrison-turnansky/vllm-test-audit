@@ -1,0 +1,32 @@
+[project]
+name = "vllm-test-audit"
+version = "2.13.0"
+description = "Two-phase test oracle auditor for vLLM"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+wheel.cmake = false
+wheel.packages = ["vllm_test_audit"]
+minimum-version = "build-system.requires"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

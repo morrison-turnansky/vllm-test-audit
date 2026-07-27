@@ -1,0 +1,23 @@
+{
+  "test_files_in_scope": 30,
+  "candidates_analyzed": 1,
+  "candidates": [
+    {
+      "candidate": "test_quant_model_tp_equality",
+      "file": "tests/lora/test_quant_model.py",
+      "line": 132,
+      "comparison": "output_tp1 == output_tp2 (cross-TP exact equality)",
+      "oracle": "Cross-TP output equality for quantized LoRA",
+      "helper": "do_sample",
+      "batch_invariant_enabled": false,
+      "code_path_verified": true,
+      "fixtures": "tinyllama_lora_files, num_gpus_available",
+      "c1_weak_oracle": "YES - exact text equality across TP configurations",
+      "c2_realistic_breakage": "YES - PyTorch numeric changes could cause TP1 != TP2 if reduction order differs",
+      "c3_no_strong_contract": "YES - no contract guarantees identical output across different TP configurations",
+      "classification": "COINCIDENTALLY_CORRECT",
+      "coincidentally_correct": true,
+      "code_snippet": "assert output_tp1 == output_tp2"
+    }
+  ]
+}

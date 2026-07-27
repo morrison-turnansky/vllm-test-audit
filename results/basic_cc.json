@@ -1,0 +1,40 @@
+{
+  "test_files_in_scope": 4,
+  "candidates_analyzed": 2,
+  "candidates": [
+    {
+      "candidate": "test_models",
+      "file": "tests/basic_correctness/test_basic_correctness.py",
+      "line": 71,
+      "comparison": "check_outputs_equal: exact token ID list == and exact string ==",
+      "oracle": "HF greedy vs vLLM greedy, exact text/token match",
+      "helper": "check_outputs_equal (tests/models/utils.py:25)",
+      "batch_invariant_enabled": false,
+      "code_path_verified": true,
+      "fixtures": "hf_runner",
+      "c1_weak_oracle": "YES \u2014 exact text and token ID equality (==) between two different implementations",
+      "c2_realistic_breakage": "YES \u2014 PyTorch numeric changes (kernel updates, decomposition changes) can shift logits enough to flip greedy argmax, especially at 5 max_tokens with long prompts",
+      "c3_no_strong_contract": "YES \u2014 HF and vLLM are independent implementations with different attention backends, different memory management, and different execution paths; no contract guarantees identical greedy output",
+      "classification": "COINCIDENTALLY_CORRECT",
+      "coincidentally_correct": true,
+      "code_snippet": "check_outputs_equal(outputs_0_lst=hf_outputs, outputs_1_lst=vllm_outputs, name_0='hf', name_1='vllm')"
+    },
+    {
+      "candidate": "test_models_distributed",
+      "file": "tests/basic_correctness/test_basic_correctness.py",
+      "line": 145,
+      "comparison": "check_outputs_equal: exact token ID list == and exact string ==",
+      "oracle": "HF greedy vs vLLM greedy (tensor_parallel_size=2), exact text/token match",
+      "helper": "check_outputs_equal (tests/models/utils.py:25)",
+      "batch_invariant_enabled": false,
+      "code_path_verified": true,
+      "fixtures": "hf_runner, vllm_runner, example_prompts, monkeypatch",
+      "c1_weak_oracle": "YES \u2014 exact text and token ID equality between HF and distributed vLLM",
+      "c2_realistic_breakage": "YES \u2014 distributed execution adds all-reduce non-determinism and reduction order sensitivity; PyTorch numeric changes amplified by TP communication",
+      "c3_no_strong_contract": "YES \u2014 HF single-GPU vs vLLM tensor-parallel are fundamentally different execution paths with no identical-output contract",
+      "classification": "COINCIDENTALLY_CORRECT",
+      "coincidentally_correct": true,
+      "code_snippet": "check_outputs_equal(outputs_0_lst=hf_outputs, outputs_1_lst=vllm_outputs, name_0='hf', name_1='vllm')"
+    }
+  ]
+}
