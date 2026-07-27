@@ -12,7 +12,7 @@
   "author": {
     "name": "compile"
   },
-  "homepage": "https://github.com/TorchedHat/ai-marketplace",
+  "homepage": "https://github.com/morrison-turnansky/vllm-nightly-audit.git",
   "keywords": [
     "vllm",
     "pytorch",
