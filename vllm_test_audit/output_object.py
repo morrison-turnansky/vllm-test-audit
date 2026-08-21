@@ -62,7 +62,10 @@ class AuditReport:
         """Assert every test from list_tests.py output has a candidate entry.
 
         Args:
-            expected_tests: CSV lines from list_tests.py in DIR,FILE,FUNCTION format.
+            expected_tests: CSV lines from list_tests.py in DIR,FILE,FUNCTION
+                format. FUNCTION uses pytest node-id semantics, so class methods
+                appear as ``ClassName::test_method``; each candidate's
+                ``candidate`` field must match that value verbatim.
 
         Raises:
             AssertionError: If any expected test is missing from the report.

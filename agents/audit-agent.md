@@ -27,7 +27,7 @@ ${CLAUDE_PLUGIN_ROOT}/skills/audit-contract/example.md
 Parse the user's input to determine the mode:
 
 - **PR number or URL** → get changed files via `gh pr view <number> --repo vllm-project/vllm --json files --jq '.files[].path'`, save to a temp file, then pass to `list_tests.py`
-- **Directory path, file path, or `file::test_function`** → pass directly to `list_tests.py`
+- **Directory path, file path, or `file::ClassName::test_function`** → pass directly to `list_tests.py`
 
 Run the listing script to get every test function in scope:
 
@@ -36,6 +36,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/vllm_test_audit/list_tests.py" <input> | tee ../t
 ```
 
 This outputs `DIR,FILE,FUNCTION`, one per line, sorted by directory/file/function order. The list is saved to `../test_list.csv` for verification. You must analyze **every** function in this list — do not skip any.
+
+`FUNCTION` uses pytest node-id semantics: a class-bound method is `ClassName::test_method`, while a module-level test is just `test_method`. Use the `FUNCTION` field **verbatim** as the `candidate` value so coverage verification matches.
 
 If no test functions found, report "No test functions found" and stop.
 
@@ -67,7 +69,7 @@ report = AuditReport(
     candidates_analyzed=<N>,
     candidates=[
         AuditCandidate(
-            candidate="test_name",
+            candidate="TestClass::test_name",  # verbatim FUNCTION field (bare test_name if module-level)
             file="tests/path/to/file.py",
             line=123,
             comparison="what two executions are compared",

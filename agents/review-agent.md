@@ -53,7 +53,7 @@ report = ReviewReport(
     phase_1_reclassified=<N>,
     candidates=[
         ReviewCandidate(
-            candidate="test_name",
+            candidate="TestClass::test_name",  # copy verbatim from the Phase 1 candidate (bare test_name if module-level)
             phase_1_classification="COINCIDENTALLY_CORRECT",
             phase_1_coincidentally_correct=True,
             review="AGREE",

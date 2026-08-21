@@ -11,6 +11,7 @@ from vllm_test_audit.list_tests import (
     list_from_directory,
     list_from_pr,
     list_functions,
+    main,
 )
 
 
@@ -62,7 +63,40 @@ class TestListFunctions:
         )
         results = list_functions(str(f))
         funcs = [r[2] for r in results]
-        assert funcs == ["test_foo", "test_bar", "test_baz"]
+        assert funcs == ["test_foo", "test_bar", "TestStuff::test_baz"]
+
+    def test_class_qualified_names(self, tmp_path: Path) -> None:
+        """Class-bound methods are qualified; module-level tests are not."""
+        f = tmp_path / "test_qualified.py"
+        f.write_text(
+            textwrap.dedent("""\
+            def test_module_level():
+                pass
+
+            class TestFirst:
+                def test_one(self):
+                    pass
+
+                async def test_two(self):
+                    pass
+
+            class TestSecond:
+                def test_three(self):
+                    pass
+
+            def test_after_class():
+                pass
+        """)
+        )
+        results = list_functions(str(f))
+        funcs = [r[2] for r in results]
+        assert funcs == [
+            "test_module_level",
+            "TestFirst::test_one",
+            "TestFirst::test_two",
+            "TestSecond::test_three",
+            "test_after_class",
+        ]
 
     def test_async_test_functions(self, tmp_path: Path) -> None:
         """Extracts async def test_ functions."""
@@ -182,6 +216,25 @@ class TestListFromPr:
             assert func_name.startswith("test_")
 
 
+class TestMainFileFunction:
+    """Tests for main()'s file::function target parsing."""
+
+    def test_bare_function(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """file::test_function keeps the bare function name."""
+        with patch("sys.argv", ["x", "tests/foo/test_bar.py::test_plain"]):
+            main()
+        out = capsys.readouterr().out.strip()
+        assert out == "tests/foo,test_bar.py,test_plain"
+
+    def test_class_qualified_function(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """file::ClassName::test_function preserves the class qualifier."""
+        target = "tests/foo/test_bar.py::TestThing::test_method"
+        with patch("sys.argv", ["x", target]):
+            main()
+        out = capsys.readouterr().out.strip()
+        assert out == "tests/foo,test_bar.py,TestThing::test_method"
+
+
 class TestBuildTestFuncMap:
     """Tests for mapping line numbers to test functions."""
 
@@ -221,4 +274,4 @@ class TestBuildTestFuncMap:
         )
         mapping = _build_test_func_map(str(f))
         assert len(mapping) == 1
-        assert mapping[0][1] == "test_method"
+        assert mapping[0][1] == "TestFoo::test_method"

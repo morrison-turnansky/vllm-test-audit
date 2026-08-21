@@ -20,8 +20,43 @@ import subprocess
 import sys
 from pathlib import Path
 
-TEST_FUNC_RE = re.compile(r"(?:    )?(?:async )?def (test_\w+)")
+TEST_FUNC_RE = re.compile(r"( *)(?:async )?def (test_\w+)")
+CLASS_RE = re.compile(r"( *)class (\w+)")
 ADDED_FUNC_RE = re.compile(r"\+\s*(?:async )?def (test_\w+)")
+
+
+def _scan_functions(lines: list[str]) -> list[tuple[int, str]]:
+    """Scan source lines for test functions, qualifying class methods.
+
+    Class-bound methods are returned as ``ClassName::method`` (pytest node-id
+    semantics); module-level tests keep their bare name.
+
+    Args:
+        lines: Source lines of a Python test file.
+
+    Returns:
+        List of (line_number, qualified_name) tuples, ordered by line number.
+    """
+    results = []
+    class_stack: list[tuple[int, str]] = []
+    for line_num, line in enumerate(lines, 1):
+        class_match = CLASS_RE.match(line)
+        if class_match:
+            indent = len(class_match.group(1))
+            while class_stack and class_stack[-1][0] >= indent:
+                class_stack.pop()
+            class_stack.append((indent, class_match.group(2)))
+            continue
+        func_match = TEST_FUNC_RE.match(line)
+        if func_match:
+            indent = len(func_match.group(1))
+            while class_stack and class_stack[-1][0] >= indent:
+                class_stack.pop()
+            func_name = func_match.group(2)
+            if class_stack:
+                func_name = f"{class_stack[-1][1]}::{func_name}"
+            results.append((line_num, func_name))
+    return results
 
 
 def list_functions(file_path: str) -> list[tuple[str, str, str]]:
@@ -37,10 +72,8 @@ def list_functions(file_path: str) -> list[tuple[str, str, str]]:
     path = Path(file_path)
     if not path.is_file():
         return results
-    for line in path.read_text().splitlines():
-        match = TEST_FUNC_RE.match(line)
-        if match:
-            results.append((str(path.parent), path.name, match.group(1)))
+    for _line_num, func_name in _scan_functions(path.read_text().splitlines()):
+        results.append((str(path.parent), path.name, func_name))
     return results
 
 
@@ -88,13 +121,8 @@ def _build_test_func_map(file_path: str) -> list[tuple[int, str]]:
     Returns:
         List of (line_number, function_name) tuples, ordered by line number.
     """
-    test_starts = []
     with open(file_path) as source_file:
-        for line_num, line in enumerate(source_file, 1):
-            match = TEST_FUNC_RE.match(line)
-            if match:
-                test_starts.append((line_num, match.group(1)))
-    return test_starts
+        return _scan_functions(source_file.read().splitlines())
 
 
 def list_from_pr(args: list[str]) -> list[tuple[str, str, str]]:
@@ -156,8 +184,16 @@ def list_from_pr(args: list[str]) -> list[tuple[str, str, str]]:
         base_name = os.path.basename(file_path)
 
         if file_path in new_files:
-            for func_name in new_funcs.get(file_path, set()):
-                results.add((dir_name, base_name, func_name))
+            # Every test in a new file is added; scan the checkout for class
+            # context, falling back to bare diff names if it isn't present.
+            if os.path.isfile(file_path):
+                for _line_num, func_name in _scan_functions(
+                    Path(file_path).read_text().splitlines()
+                ):
+                    results.add((dir_name, base_name, func_name))
+            else:
+                for func_name in new_funcs.get(file_path, set()):
+                    results.add((dir_name, base_name, func_name))
         else:
             if os.path.isfile(file_path):
                 test_starts = _build_test_func_map(file_path)
@@ -166,9 +202,9 @@ def list_from_pr(args: list[str]) -> list[tuple[str, str, str]]:
                         if start_line <= changed_line:
                             results.add((dir_name, base_name, func_name))
                             break
-
-            for func_name in new_funcs.get(file_path, set()):
-                results.add((dir_name, base_name, func_name))
+            else:
+                for func_name in new_funcs.get(file_path, set()):
+                    results.add((dir_name, base_name, func_name))
 
     return sorted(results)
 

@@ -101,6 +101,22 @@ class TestAuditReport:
         with pytest.raises(AssertionError, match="Missing 1 test"):
             report.verify_coverage(csv_lines)
 
+    def test_verify_coverage_class_qualified(self) -> None:
+        """Class-qualified FUNCTION field (with ::) matches the candidate."""
+        report = AuditReport(
+            test_files_in_scope=1,
+            candidates_analyzed=2,
+            candidates=[
+                _make_candidate("TestFoo::test_method"),
+                _make_candidate("test_module_level"),
+            ],
+        )
+        csv_lines = [
+            "tests,test_example.py,TestFoo::test_method",
+            "tests,test_example.py,test_module_level",
+        ]
+        report.verify_coverage(csv_lines)
+
     def test_verify_coverage_skips_empty_lines(self) -> None:
         """Empty lines in CSV are skipped."""
         report = AuditReport(
