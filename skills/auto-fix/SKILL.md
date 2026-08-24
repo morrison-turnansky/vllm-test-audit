@@ -20,7 +20,7 @@ Do not "fix" a test by loosening an assertion until it passes today. Loosening w
 | The two executions differ on… | Remedy | Clause it satisfies |
 |---|---|---|
 | Cross-runtime (vLLM vs HF), eager vs compile, TP/PP/EP, prompt vs prompt_embeds, batch geometry | **Tolerance oracle** (§1) | c1 fails — oracle now tolerates drift |
-| Restoration path, streaming, duplicate-in-batch, spec decode (same engine, transport/state only) | **Batch-invariant mode** (§2) | Clauses 5, 6, 7, 9 |
+| Restoration path, streaming, duplicate-in-batch, spec decode (same engine, transport/state only) | **Batch-invariant mode** (§2) | Clause 9 |
 | Single deterministic engine, output you can pin | **Golden strings** (§3) | c1 fails — pinned reference, not a live second run |
 | Acceptance/match ratios (spec decode, quantization) | **Principled threshold** (§4) | c1 fails — threshold is justified |
 
@@ -133,3 +133,4 @@ Do not claim a fix works if you could not run it — say so and give the exact c
 - Adding `VLLM_BATCH_INVARIANT` in the parent process for a spawned-worker generation (non-fix; RECLASSIFY).
 - Using BI mode to justify cross-runtime or cross-compile exact equality.
 - Editing a shared alignment shim in place and breaking its other caller.
+- Do not add comments, just make changes.
