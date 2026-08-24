@@ -32,8 +32,9 @@ A strong contract waives scrutiny only for the *specific difference it names*. I
 
 Device specific assumptions and guards should be ignored. Invalid contracts on any single hardware is sufficent to void a strong contract.
 
-Batch-invariance preconditions are hard gates. Clause 9 apply *only* when the test actually forces batch-invariant execution — an explicit `VLLM_BATCH_INVARIANT=1` set in the test or in the spawned generation process, an autouse fixture that sets it, or the test living under `tests/v1/determinism/` (clause 10). If BI is not enabled by one of those mechanisms, the clause is **void**: do not cite it, and re-apply all three criteria to the compared axis. Do not substitute your own determinism rationale — identical prompts, batch geometry, `temperature=0`, seed, or tp_size — for a named precondition; that reasoning is exactly what these clauses override by requiring the flag.
+Batch-invariance preconditions are hard gates. Clauses 9, 11, 12, and 13 apply *only* when the test actually forces batch-invariant execution — an explicit `VLLM_BATCH_INVARIANT=1` set in the test or in the spawned generation process, an autouse fixture that sets it, or the test living under `tests/v1/determinism/` (clause 10). If BI is not enabled by one of those mechanisms, the clause is **void**: do not cite it, and re-apply all three criteria to the compared axis. Do not substitute your own determinism rationale — identical prompts, batch geometry, `temperature=0`, seed, or tp_size — for a named precondition; that reasoning is exactly what these clauses override by requiring the flag.
 
+BI-gated clauses (9, 11, 12, 13) only waive scrutiny for axes that are pure batch composition/geometry under an otherwise-fixed engine, parallelism topology, and compile strategy. They do not extend to cross-runtime, cross-parallelism-degree (TP/PP/EP/DCP), or cross-compile-strategy axes — see Not Strong By Default #1-5. Batch invariance constrains kernel selection and accumulation order within one fixed execution strategy; it cannot make two structurally different strategies converge.
 
 Treat these as strong enough to classify as STRONG_CONTRACT unless the test adds another weak oracle on top:
 
@@ -47,6 +48,9 @@ Treat these as strong enough to classify as STRONG_CONTRACT unless the test adds
 8. Same prompt with the same explicit seed in the same engine/request setup.
 9. Spec decode exact matching only when the test explicitly forces batch-invariant mode/kernels.
 10. Tests under `tests/v1/determinism/` get `VLLM_BATCH_INVARIANT=1` from the autouse `conftest.py` fixture — account for that before classifying as ordinary batch-invariance assumptions.
+11. Batch size invariance (BS=1 vs BS=N) for the same request, same engine, same parallelism/compile configuration — only when the test explicitly forces batch-invariant mode/kernels (mirrors Not Strong By Default #6).
+12. Cascade attention vs non-cascade attention where the only differing axis is batch geometry — only when the test explicitly forces batch-invariant mode/kernels (mirrors Not Strong By Default #7).
+13. Single request vs the same request as one item in a larger (e.g. multimodal) batch — only when the test explicitly forces batch-invariant execution (mirrors Not Strong By Default #10).
 
 ## Not Strong By Default
 
@@ -122,6 +126,6 @@ Fields per candidate:
 | phase_1_coincidentally_correct | — | yes | What Phase 1 said (true/false) |
 | review | — | yes | AGREE / RECLASSIFY — reason |
 
-**Consistency rule:** if `c3_no_strong_contract` cites clause 9, then `batch_invariant_enabled` must be `true` (set directly, by an autouse fixture, or via `tests/v1/determinism/`). If it is `false`, the citation is invalid — the candidate cannot be STRONG_CONTRACT on that clause; re-apply all three criteria and reclassify. Phase 2 must treat this contradiction as an automatic RECLASSIFY regardless of the Phase 1 rationale.
+**Consistency rule:** if `c3_no_strong_contract` cites clause 9, 11, 12, or 13, then `batch_invariant_enabled` must be `true` (set directly, by an autouse fixture, or via `tests/v1/determinism/`). If it is `false`, the citation is invalid — the candidate cannot be STRONG_CONTRACT on that clause; re-apply all three criteria and reclassify. Phase 2 must treat this contradiction as an automatic RECLASSIFY regardless of the Phase 1 rationale.
 
 **Batch Invariance Definition** Batch invariance means that a request's numerical result should not change when the request is placed in a different batch or processed with a different amount of concurrent work. The important distinction is: Run-to-run determinism: same exact computation implies same result every time. Batch invariance: same individual request implies same result even when the batch size/composition or how the sequence is split changes.
