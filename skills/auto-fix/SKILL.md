@@ -74,9 +74,7 @@ Switching helpers changes what each side returns. Getting this wrong produces a 
 
 For same-engine, same-strategy paths that *should* be bitwise-identical but aren't guaranteed without it — restoration (clause 5), streaming vs non-streaming (clause 6), duplicate-in-batch (clause 7), spec decode (clause 9), batch size BS=1 vs BS=N (clause 11), cascade vs non-cascade attention when the only differing axis is batch geometry (clause 12), single request vs first-of-batch (clause 13). This is the **preferred remedy** whenever the axis is pure batch composition/geometry/transport — it installs a real contract instead of just tolerating drift. Force batch-invariant kernels on **both** compared paths, then exact equality becomes a real contract.
 
-```python
-monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
-```
+The code base has various ways to set VLLM_BATCH_INVARIANT. Look at the surrouinding code of the test and copy that. 
 
 Set it so it reaches the actual generation process:
 - directly in the test (or via `monkeypatch.setenv`) **before** the engine starts;
@@ -137,3 +135,5 @@ Do not claim a fix works if you could not run it — say so and give the exact c
 - Reaching for a tolerance oracle on a pure batch-geometry axis (BS=1 vs BS=N, cascade-attention batch trigger, single-vs-batched request) when BI would install a real contract instead — that under-fixes it.
 - Editing a shared alignment shim in place and breaking its other caller.
 - Do not add comments, just make changes.
+- Introducing a new helper function/method to carry the fix when the fix fits inline in the existing function body or into an already-existing helper — keep the diff minimal, don't add abstractions the fix doesn't need.
+- Changing a test function's (or a shared helper's) signature to thread through an env-setting fixture — e.g. adding a `monkeypatch` parameter just to call `monkeypatch.setenv(...)`. Use the fixture-free `pytest.MonkeyPatch.context()` classmethod (§2) instead, so no signature changes anywhere.
