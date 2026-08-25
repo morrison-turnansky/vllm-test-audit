@@ -74,14 +74,30 @@ Switching helpers changes what each side returns. Getting this wrong produces a 
 
 For same-engine, same-strategy paths that *should* be bitwise-identical but aren't guaranteed without it — restoration (clause 5), streaming vs non-streaming (clause 6), duplicate-in-batch (clause 7), spec decode (clause 9), batch size BS=1 vs BS=N (clause 11), cascade vs non-cascade attention when the only differing axis is batch geometry (clause 12), single request vs first-of-batch (clause 13). This is the **preferred remedy** whenever the axis is pure batch composition/geometry/transport — it installs a real contract instead of just tolerating drift. Force batch-invariant kernels on **both** compared paths, then exact equality becomes a real contract.
 
-The code base has various ways to set VLLM_BATCH_INVARIANT. Look at the surrouinding code of the test and copy that. 
+The code base's standard way to force this for an **in-process** engine (`LLM(...)` built in the test body, or the `vllm_runner`/`VllmRunner` fixture) is the pytest `monkeypatch` fixture: add `monkeypatch: pytest.MonkeyPatch` to the test signature and set **two** vars before the engine is built. Copy it from `tests/lora/test_gptoss_tp.py` / `tests/lora/test_qwenvl.py`, which factor it into a one-line helper:
+
+```python
+def _enable_batch_invariant(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    monkeypatch.setenv("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
+
+def test_foo(vllm_runner, monkeypatch: pytest.MonkeyPatch):
+    _enable_batch_invariant(monkeypatch)            # BEFORE the engine is built
+    with vllm_runner(MODEL, ...) as vllm_model:     # or: llm = vllm.LLM(MODEL, ...)
+        ...                                         # generate + assert
+```
+
+Adding the `monkeypatch` parameter is the accepted convention here — do it, rather than `pytest.MonkeyPatch.context()` (the code base uses that form in only one helper). The fixture is unavailable only for a **broader-than-function-scoped** fixture (e.g. a `scope="module"` engine), since the built-in `monkeypatch` is function-scoped: drop that fixture to function scope and give it a `monkeypatch` param, or build the engine in the test body.
+
+`VLLM_WORKER_MULTIPROC_METHOD=spawn` is **not optional** for an in-process engine. Several kernels capture the flag at *import time* (`is_batch_invariant = envs.VLLM_BATCH_INVARIANT` at module scope in `vllm/v1/attention/ops/triton_unified_attention.py`, `vllm/lora/ops/triton_ops/utils.py`, and the fused-MoE routers). Under the default `fork` executor, a worker forked after the parent imported those modules keeps the parent's already-captured `False` regardless of your `setenv` — a silent non-fix. `spawn` starts the worker as a fresh interpreter that re-imports with the var already in its env, so BI actually takes effect.
 
 Set it so it reaches the actual generation process:
-- directly in the test (or via `monkeypatch.setenv`) **before** the engine starts;
-- in the **spawned** worker env for multiprocessing/distributed executors, not just the parent;
+- **in-process engine** (`LLM` / `vllm_runner`): `monkeypatch.setenv(...)` for both vars **before** the engine is built (function-scoped test or fixture);
+- **out-of-process server** (`RemoteOpenAIServer` / `vllm serve`): pass `env_dict={"VLLM_BATCH_INVARIANT": "1"}` only — the server is already a fresh subprocess that re-imports, so no `spawn` var is needed (see `test_completion_with_prompt_embeds.py`, `test_transcription_validation_whisper.py`);
 - or rely on the autouse fixture if the test lives under `tests/v1/determinism/` (clause 10) — then no manual set is needed.
 
-**Consistency rule (from the contract):** if your fix cites clause 5/6/7/9/11/12/13, `batch_invariant_enabled` must actually be `true` end-to-end. Setting the var in the parent while generation happens in an unset child is a *non-fix* — Phase 2 will RECLASSIFY it.
+**Consistency rule (from the contract):** the BI-gated clauses are **9, 11, 12, and 13** — only these require `batch_invariant_enabled` to be `true`. If your fix cites one of them, BI must actually be `true` end-to-end; setting the var in the parent while generation happens in an unset (or `fork`ed, import-stale) child is a *non-fix* — Phase 2 will RECLASSIFY it. Clauses 5/6/7 (restoration, streaming, duplicate-in-batch) are strong contracts *by default* and are **not** BI-gated, so BI is a way to reinforce them but is not required to cite them.
 
 **Caveat — BI does not cross runtimes, compile strategies, or parallelism degrees.** It constrains vLLM's own kernel selection and accumulation order within one fixed execution strategy. It cannot make HuggingFace match vLLM, does not license exact equality across different compile/graph-partition/fused-distributed strategies (contract "Not Strong By Default" 1–5), and does not license exact equality across different TP/PP/EP/DCP degrees (contract "Not Strong By Default" 4) — different parallelism topologies use different reduction trees and communication patterns, which BI does not unify. For those structural axes use §1.
 
@@ -115,7 +131,7 @@ For acceptance-rate / match-ratio oracles (spec decode, quantization parity), ke
 A remedy is not done until:
 
 1. **Re-audit.** Re-apply the 3 criteria. The fix must make c1 **no** (oracle tolerates drift / is pinned / threshold principled) or c3 cite a now-valid clause. If all three still hold, it's not fixed.
-2. **Consistency check.** If you cite clause 5/6/7/9/11/12/13, confirm `VLLM_BATCH_INVARIANT=1` reaches the generation process (§2). Otherwise the citation is invalid.
+2. **Consistency check.** If you cite a BI-gated clause (9, 11, 12, or 13), confirm `VLLM_BATCH_INVARIANT=1` reaches the generation process (§2). For an in-process engine, that means `VLLM_WORKER_MULTIPROC_METHOD=spawn` is also set — under the default `fork` the worker keeps the import-time `False`. Otherwise the citation is invalid.
 3. **Alignment check.** For §1, confirm both compared sides return the same token span (§1 pitfalls) — inspect one failing/passing pair, don't assume.
 4. **Run it.** Execute the specific test on target hardware and paste the result into the PR:
    ```bash
@@ -130,10 +146,9 @@ Do not claim a fix works if you could not run it — say so and give the exact c
 
 - Loosening an assertion with no principle ("bump atol until green").
 - Deleting the assertion or downgrading to a smoke check (`len(output) > 0`) — that just makes it NOT_REALISTIC by gutting coverage.
-- Adding `VLLM_BATCH_INVARIANT` in the parent process for a spawned-worker generation (non-fix; RECLASSIFY).
+- Adding `VLLM_BATCH_INVARIANT` in the parent process for a spawned-worker generation (non-fix; RECLASSIFY). For an in-process engine this also means omitting `VLLM_WORKER_MULTIPROC_METHOD=spawn` — the default `fork` worker inherits the parent's import-time `False`, so BI never takes effect.
 - Using BI mode to justify cross-runtime, cross-compile-strategy, or cross-parallelism-degree (TP/PP/EP/DCP) exact equality.
 - Reaching for a tolerance oracle on a pure batch-geometry axis (BS=1 vs BS=N, cascade-attention batch trigger, single-vs-batched request) when BI would install a real contract instead — that under-fixes it.
 - Editing a shared alignment shim in place and breaking its other caller.
 - Do not add comments, just make changes.
 - Introducing a new helper function/method to carry the fix when the fix fits inline in the existing function body or into an already-existing helper — keep the diff minimal, don't add abstractions the fix doesn't need.
-- Changing a test function's (or a shared helper's) signature to thread through an env-setting fixture — e.g. adding a `monkeypatch` parameter just to call `monkeypatch.setenv(...)`. Use the fixture-free `pytest.MonkeyPatch.context()` classmethod (§2) instead, so no signature changes anywhere.
