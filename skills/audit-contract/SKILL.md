@@ -41,7 +41,14 @@ Treat these as strong enough to classify as STRONG_CONTRACT unless the test adds
 1. Eager vs eager with the same request sequence, same engine state, and deterministic sampling.
 2. **Kernel tolerance tests** (`assert_close(atol=...)`, `torch.allclose`) — the tolerance IS the contract. These test numeric precision of discrete compute operations, not LLM output.
 3. Same compile mode/artifact/config vs itself. Do NOT generalize to different compile strategies or fused distributed passes.
-4. Eager vs cudagraph for the same graph/execution family.
+4. CUDA graph and Inductor graph-partitioning choices (`cudagraph_mode` and
+   `use_inductor_graph_partition`) for the same model, attention backend,
+   parallelism topology, deterministic request sequence/sampling, and all
+   other numerically relevant compilation settings. These choices change
+   capture/replay or graph partitioning, not model math, so exact generated
+   outputs are expected to remain identical. This includes eager vs
+   cudagraph for the same graph/execution family and full vs piecewise
+   cudagraph execution.
 5. Restoration paths — CPU offload, prefetch offload, sleep/wake, reload, tensorizer, KV-transfer — should not change model math.
 6. Streaming vs non-streaming response reconstruction
 7. Duplicate identical requests in the same batch with the same sampling settings
@@ -58,7 +65,7 @@ These remain suspicious unless the test explicitly establishes a stronger contra
 
 1. Eager vs compile.
 2. Non-compiled vs compiled mode parity hidden inside `compare_two_settings` or `compare_all_settings`.
-3. Different compile strategies, graph partitioning strategies, or fused distributed compile passes versus baseline.
+3. Different compile strategies, graph partitioning strategies, or fused distributed compile passes versus baseline, except for differences limited to `cudagraph_mode` and/or `use_inductor_graph_partition` under Strong Contract #4.
 4. Tensor parallel vs pipeline parallel vs expert parallel exact generated output equality.
 5. Sequence parallel, async TP, or fused distributed compile-pass parity against an unfused baseline.
 6. Batch size invariance, including BS=1 vs BS=N, unless batch-invariant kernels/mode are explicitly enabled by the test.
