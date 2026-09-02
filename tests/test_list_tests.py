@@ -1,277 +1,234 @@
-"""Tests for the list_tests module."""
+"""Tests for listing changed Python tests between Git refs."""
 
+from __future__ import annotations
+
+import subprocess
 import textwrap
+from collections.abc import Mapping
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from vllm_test_audit.list_tests import (
-    _build_test_func_map,
-    is_pr,
-    list_from_directory,
-    list_from_pr,
-    list_functions,
-    main,
-)
+
+from vllm_test_audit.list_tests import get_function_ranges, list_changed_tests, main
 
 
-class TestIsPr:
-    """Tests for PR detection."""
-
-    def test_github_url(self) -> None:
-        """Full GitHub PR URL is detected."""
-        assert is_pr("https://github.com/vllm-project/vllm/pull/1234")
-
-    def test_plain_number(self) -> None:
-        """Bare number is detected as PR."""
-        assert is_pr("1234")
-
-    def test_directory(self) -> None:
-        """Directory path is not a PR."""
-        assert not is_pr("tests/compile/")
-
-    def test_file(self) -> None:
-        """File path is not a PR."""
-        assert not is_pr("tests/test_foo.py")
-
-    def test_file_function(self) -> None:
-        """file::function is not a PR."""
-        assert not is_pr("tests/test_foo.py::test_bar")
+def git(repo: Path, *args: str) -> str:
+    """Run Git in a test repository and return its standard output."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
-class TestListFunctions:
-    """Tests for listing test functions from a file."""
+def write_files(repo: Path, files: Mapping[str, str]) -> None:
+    """Write a source snapshot into a test repository."""
+    for relative_path, source in files.items():
+        path = repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(source).lstrip())
 
-    def test_finds_test_functions(self, tmp_path: Path) -> None:
-        """Extracts all def test_ functions from a file."""
-        f = tmp_path / "test_example.py"
-        f.write_text(
-            textwrap.dedent("""\
-            def test_foo():
+
+def commit_snapshot(repo: Path, files: Mapping[str, str], message: str) -> str:
+    """Commit a source snapshot and return its commit ID."""
+    write_files(repo, files)
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", message)
+    return git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def git_repo(tmp_path: Path) -> Path:
+    """Create an initialized Git repository for a two-commit comparison."""
+    git(tmp_path, "init")
+    git(tmp_path, "config", "user.name", "Test User")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    return tmp_path
+
+
+class TestGetFunctionRanges:
+    """Tests for AST function range extraction."""
+
+    def test_includes_decorators_and_class_qualification(self) -> None:
+        """Report decorator-inclusive ranges for sync and async functions."""
+        source = textwrap.dedent(
+            """\
+            @decorator
+            def test_module():
                 pass
 
-            def test_bar():
-                pass
-
-            def helper():
-                pass
-
-            class TestStuff:
-                def test_baz(self):
+            class TestSuite:
+                @decorator
+                async def test_async(self):
                     pass
-        """)
+            """
         )
-        results = list_functions(str(f))
-        funcs = [r[2] for r in results]
-        assert funcs == ["test_foo", "test_bar", "TestStuff::test_baz"]
 
-    def test_class_qualified_names(self, tmp_path: Path) -> None:
-        """Class-bound methods are qualified; module-level tests are not."""
-        f = tmp_path / "test_qualified.py"
-        f.write_text(
-            textwrap.dedent("""\
-            def test_module_level():
-                pass
-
-            class TestFirst:
-                def test_one(self):
-                    pass
-
-                async def test_two(self):
-                    pass
-
-            class TestSecond:
-                def test_three(self):
-                    pass
-
-            def test_after_class():
-                pass
-        """)
-        )
-        results = list_functions(str(f))
-        funcs = [r[2] for r in results]
-        assert funcs == [
-            "test_module_level",
-            "TestFirst::test_one",
-            "TestFirst::test_two",
-            "TestSecond::test_three",
-            "test_after_class",
+        assert get_function_ranges(source) == [
+            (1, 3, "test_module"),
+            (6, 8, "TestSuite::test_async"),
         ]
 
-    def test_async_test_functions(self, tmp_path: Path) -> None:
-        """Extracts async def test_ functions."""
-        f = tmp_path / "test_async.py"
-        f.write_text(
-            textwrap.dedent("""\
-            async def test_async_thing():
-                pass
-        """)
-        )
-        results = list_functions(str(f))
-        assert len(results) == 1
-        assert results[0][2] == "test_async_thing"
 
-    def test_nonexistent_file(self) -> None:
-        """Returns empty for nonexistent file."""
-        assert list_functions("/nonexistent/test_foo.py") == []
+class TestListChangedTests:
+    """Tests for identifying tests changed between two commits."""
 
-    def test_no_test_functions(self, tmp_path: Path) -> None:
-        """Returns empty for file with no test functions."""
-        f = tmp_path / "test_empty.py"
-        f.write_text("def helper():\n    pass\n")
-        assert list_functions(str(f)) == []
-
-    def test_csv_format(self, tmp_path: Path) -> None:
-        """Output tuples have (dir, filename, function) structure."""
-        d = tmp_path / "tests" / "unit"
-        d.mkdir(parents=True)
-        f = d / "test_example.py"
-        f.write_text("def test_one():\n    pass\n")
-        results = list_functions(str(f))
-        assert results[0] == (str(d), "test_example.py", "test_one")
-
-
-class TestListFromDirectory:
-    """Tests for listing test functions from a directory."""
-
-    def test_finds_all_test_files(self, tmp_path: Path) -> None:
-        """Finds test functions across multiple files."""
-        (tmp_path / "test_a.py").write_text("def test_alpha():\n    pass\n")
-        (tmp_path / "test_b.py").write_text("def test_beta():\n    pass\n")
-        (tmp_path / "helper.py").write_text("def test_ignored():\n    pass\n")
-        results = list_from_directory(str(tmp_path))
-        funcs = [r[2] for r in results]
-        assert "test_alpha" in funcs
-        assert "test_beta" in funcs
-        assert "test_ignored" not in funcs
-
-    def test_recursive(self, tmp_path: Path) -> None:
-        """Finds test files in subdirectories."""
-        sub = tmp_path / "sub"
-        sub.mkdir()
-        (sub / "test_deep.py").write_text("def test_nested():\n    pass\n")
-        results = list_from_directory(str(tmp_path))
-        assert any(r[2] == "test_nested" for r in results)
-
-    def test_empty_directory(self, tmp_path: Path) -> None:
-        """Returns empty for directory with no test files."""
-        assert list_from_directory(str(tmp_path)) == []
-
-
-class TestListFromPr:
-    """Tests for extracting test functions from PR diffs."""
-
-    def test_new_test_functions_detected(
-        self, pr_adds_tests_diff: str, pr_adds_tests_expected: set[str]
+    def test_detects_module_class_and_async_tests(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """PR that adds new test functions to existing files."""
-        with patch("vllm_test_audit.list_tests.get_pr_diff", return_value=pr_adds_tests_diff):
-            results = list_from_pr(["47185"])
-        found_funcs = {result[2] for result in results}
-        assert pr_adds_tests_expected == found_funcs
+        """Return changed module-level, class-based, and async tests."""
+        before = commit_snapshot(
+            git_repo,
+            {
+                "tests/checks.py": """
+                def test_module():
+                    assert value == 1
 
-    def test_modified_test_function_detected(
+                class TestSuite:
+                    def test_class(self):
+                        assert value == 1
+
+                    async def test_async(self):
+                        assert value == 1
+                """,
+            },
+            "before",
+        )
+        after = commit_snapshot(
+            git_repo,
+            {
+                "tests/checks.py": """
+                def test_module():
+                    assert value == 2
+
+                class TestSuite:
+                    def test_class(self):
+                        assert value == 2
+
+                    async def test_async(self):
+                        assert value == 2
+                """,
+            },
+            "after",
+        )
+        monkeypatch.chdir(git_repo)
+
+        assert list_changed_tests(before, after) == [
+            ("tests", "checks.py", "TestSuite::test_async"),
+            ("tests", "checks.py", "TestSuite::test_class"),
+            ("tests", "checks.py", "test_module"),
+        ]
+
+    @pytest.mark.parametrize(
+        ("before_source", "after_source"),
+        [
+            ("def production():\n    return 1\n", "def production():\n    return 2\n"),
+            (
+                "def helper():\n    return 1\n\ndef test_kept():\n    assert True\n",
+                "def helper():\n    return 2\n\ndef test_kept():\n    assert True\n",
+            ),
+            (
+                "import first\n\ndef test_kept():\n    assert True\n",
+                "import second\n\ndef test_kept():\n    assert True\n",
+            ),
+            (
+                "import pytest\n\n@pytest.fixture\ndef value():\n    return 1\n",
+                "import pytest\n\n@pytest.fixture\ndef value():\n    return 2\n",
+            ),
+        ],
+    )
+    def test_excludes_non_test_changes(
         self,
-        pr_modifies_test_diff: str,
-        pr_modifies_test_expected: set[str],
-        mock_tracing_file: Path,
+        git_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
+        before_source: str,
+        after_source: str,
     ) -> None:
-        """PR that modifies an existing test function body."""
-        monkeypatch.chdir(mock_tracing_file)
-        with patch("vllm_test_audit.list_tests.get_pr_diff", return_value=pr_modifies_test_diff):
-            results = list_from_pr(["47299"])
-        found_funcs = {result[2] for result in results}
-        assert pr_modifies_test_expected == found_funcs
+        """Do not report production, helper, fixture, or import changes."""
+        before = commit_snapshot(git_repo, {"python_file.py": before_source}, "before")
+        after = commit_snapshot(git_repo, {"python_file.py": after_source}, "after")
+        monkeypatch.chdir(git_repo)
 
-    def test_empty_diff(self) -> None:
-        """Empty diff returns no results."""
-        with patch("vllm_test_audit.list_tests.get_pr_diff", return_value=""):
-            results = list_from_pr(["99999"])
-        assert results == []
+        assert list_changed_tests(before, after) == []
 
-    def test_diff_with_no_test_files(self) -> None:
-        """Diff that only touches non-test files returns no results."""
-        diff = (
-            "diff --git a/src/main.py b/src/main.py\n"
-            "--- a/src/main.py\n"
-            "+++ b/src/main.py\n"
-            "@@ -1,3 +1,4 @@\n"
-            " import os\n"
-            "+import sys\n"
-            " def main():\n"
-            "     pass\n"
+    def test_reports_deletion_within_a_surviving_test(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Report a test when a deleted line belongs to its surviving definition."""
+        before = commit_snapshot(
+            git_repo,
+            {"tests/test_deletions.py": "def test_survives():\n    setup()\n    assert True\n"},
+            "before",
         )
-        with patch("vllm_test_audit.list_tests.get_pr_diff", return_value=diff):
-            results = list_from_pr(["99999"])
-        assert results == []
-
-    def test_csv_format(self, pr_adds_tests_diff: str) -> None:
-        """PR results have (directory, filename, function) structure."""
-        with patch("vllm_test_audit.list_tests.get_pr_diff", return_value=pr_adds_tests_diff):
-            results = list_from_pr(["47185"])
-        for _dir_name, base_name, func_name in results:
-            assert base_name.startswith("test_")
-            assert base_name.endswith(".py")
-            assert func_name.startswith("test_")
-
-
-class TestMainFileFunction:
-    """Tests for main()'s file::function target parsing."""
-
-    def test_bare_function(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """file::test_function keeps the bare function name."""
-        with patch("sys.argv", ["x", "tests/foo/test_bar.py::test_plain"]):
-            main()
-        out = capsys.readouterr().out.strip()
-        assert out == "tests/foo,test_bar.py,test_plain"
-
-    def test_class_qualified_function(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """file::ClassName::test_function preserves the class qualifier."""
-        target = "tests/foo/test_bar.py::TestThing::test_method"
-        with patch("sys.argv", ["x", target]):
-            main()
-        out = capsys.readouterr().out.strip()
-        assert out == "tests/foo,test_bar.py,TestThing::test_method"
-
-
-class TestBuildTestFuncMap:
-    """Tests for mapping line numbers to test functions."""
-
-    def test_maps_lines_to_functions(self, tmp_path: Path) -> None:
-        """Builds correct line->function mapping."""
-        f = tmp_path / "test_example.py"
-        f.write_text(
-            textwrap.dedent("""\
-            import os
-
-            def test_first():
-                x = 1
-                assert x == 1
-
-            def test_second():
-                y = 2
-                assert y == 2
-
-            def helper():
-                pass
-        """)
+        after = commit_snapshot(
+            git_repo,
+            {"tests/test_deletions.py": "def test_survives():\n    assert True\n"},
+            "after",
         )
-        mapping = _build_test_func_map(str(f))
-        assert len(mapping) == 2
-        assert mapping[0] == (3, "test_first")
-        assert mapping[1] == (7, "test_second")
+        monkeypatch.chdir(git_repo)
 
-    def test_indented_methods(self, tmp_path: Path) -> None:
-        """Handles class-level test methods."""
-        f = tmp_path / "test_class.py"
-        f.write_text(
-            textwrap.dedent("""\
-            class TestFoo:
-                def test_method(self):
-                    pass
-        """)
+        assert list_changed_tests(before, after) == [
+            ("tests", "test_deletions.py", "test_survives"),
+        ]
+
+    def test_excludes_a_deleted_test_function(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Do not report a test function that exists only in the old commit."""
+        before = commit_snapshot(
+            git_repo,
+            {"tests/test_deletions.py": "def test_removed():\n    assert True\n"},
+            "before",
         )
-        mapping = _build_test_func_map(str(f))
-        assert len(mapping) == 1
-        assert mapping[0][1] == "TestFoo::test_method"
+        after = commit_snapshot(git_repo, {"tests/test_deletions.py": ""}, "after")
+        monkeypatch.chdir(git_repo)
+
+        assert list_changed_tests(before, after) == []
+
+
+class TestMain:
+    """Tests for command-line output."""
+
+    def test_outputs_pytest_node_ids(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print one pytest node ID per changed test."""
+        before = commit_snapshot(
+            git_repo,
+            {
+                "tests/checks.py": """
+                def test_module():
+                    assert value == 1
+
+                class TestSuite:
+                    def test_method(self):
+                        assert value == 1
+                """,
+            },
+            "before",
+        )
+        after = commit_snapshot(
+            git_repo,
+            {
+                "tests/checks.py": """
+                def test_module():
+                    assert value == 2
+
+                class TestSuite:
+                    def test_method(self):
+                        assert value == 2
+                """,
+            },
+            "after",
+        )
+        monkeypatch.chdir(git_repo)
+
+        main([before, after])
+
+        assert capsys.readouterr().out.splitlines() == [
+            "tests/checks.py::TestSuite::test_method",
+            "tests/checks.py::test_module",
+        ]
