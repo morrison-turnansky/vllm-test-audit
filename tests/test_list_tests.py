@@ -122,6 +122,30 @@ class TestListChangedTests:
             ("tests", "checks.py", "test_module"),
         ]
 
+    def test_handles_an_added_test_file_after_a_modified_file(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Do not treat an added file's /dev/null header as a prior-file deletion."""
+        before = commit_snapshot(
+            git_repo,
+            {"tests/existing.py": "def test_existing():\n    assert True\n"},
+            "before",
+        )
+        after = commit_snapshot(
+            git_repo,
+            {
+                "tests/existing.py": "def test_existing():\n    assert False\n",
+                "tests/added.py": "def test_added():\n    assert True\n",
+            },
+            "after",
+        )
+        monkeypatch.chdir(git_repo)
+
+        assert list_changed_tests(before, after) == [
+            ("tests", "added.py", "test_added"),
+            ("tests", "existing.py", "test_existing"),
+        ]
+
     @pytest.mark.parametrize(
         ("before_source", "after_source"),
         [

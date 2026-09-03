@@ -3,6 +3,8 @@
 Usage:
     python list_tests.py <commit-a> <commit-b>
 
+Run this command from the vLLM Git checkout containing both commits.
+
 Output:
     path/to/test_file.py::ClassName::test_name
 """
@@ -89,6 +91,12 @@ def parse_changed_lines(diff: str) -> tuple[ChangedLines, ChangedLines]:
     new_line = 0
 
     for line in diff.splitlines():
+        if line.startswith("--- "):
+            # A file header belongs to no hunk. Clear the prior file before the
+            # following +++ header; otherwise an added file's --- /dev/null
+            # header is wrongly recorded as a deletion in the preceding file.
+            current_file = None
+            continue
         if line.startswith("+++ b/"):
             current_file = line[6:]
             continue
